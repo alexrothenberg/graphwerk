@@ -13,6 +13,7 @@ module Graphwerk
           package_todo_color: String,
           application: T::Hash[Symbol, Object],
           graph: T::Hash[Symbol, Object],
+          cluster: T::Hash[Symbol, Object],
           node: T::Hash[Symbol, Object],
           edge: T::Hash[Symbol, Object]
         }
@@ -31,6 +32,9 @@ module Graphwerk
           root: Constants::ROOT_PACKAGE_NAME,
           overlap: false,
           splines: true
+        },
+        cluster: {
+          color: 'blue'
         },
         node: {
           shape: 'box',
@@ -82,6 +86,7 @@ module Graphwerk
       sig { void }
       def setup_graph
         @graph = build_empty_graph
+        @graph['compound'] = true
         @nodes = build_empty_nodes
         @options[:graph].each_pair { |k,v| @graph.graph[k] =v }
         @options[:node].each_pair { |k,v| @graph.node[k] =v }
@@ -100,7 +105,24 @@ module Graphwerk
       sig { void }
       def add_packages_to_graph
         packages.each do |package|
-          @nodes[package.name] = @graph.add_nodes(package.name, color: package.color)
+          cluster = cluster_for(package.name)
+          @nodes[package.name] = cluster.add_nodes(package.name, color: package.color, label: package.name.split('/').last)
+        end
+      end
+
+      sig { params(package_name: String).returns(GraphViz) }
+      def cluster_for(package_name)
+        parts = package_name.split('/')
+        package_name = parts.pop
+        cluster_name = parts.join('/')
+        if cluster_name.empty?
+          @graph
+        else
+          cluster = @graph.get_graph("cluster_#{cluster_name}")
+          if cluster.nil?
+            cluster = @graph.add_graph("cluster_#{cluster_name}", @options[:cluster].merge(label: cluster_name))
+          end
+          cluster
         end
       end
 
@@ -110,30 +132,34 @@ module Graphwerk
           unless @nodes[dependency]
             abort "Unable to add edge `#{package.name}`->`#{dependency}`"
           end
-          @graph.add_edges(@nodes[package.name], @nodes[dependency], color: package.color)
+          add_edge(package.name, dependency, package.color)
         end
       end
 
       sig { params(package: Presenters::Package).void }
       def draw_deprecated_references(package)
         package.deprecated_references.each do |reference|
-          @graph.add_edges(
-            @nodes[package.name],
-            @nodes[reference],
-            color: @options[:deprecated_references_color]
-          )
+          add_edge(package.name, reference, @options[:deprecated_references_color])
         end
       end
 
       sig { params(package: Presenters::Package).void }
       def draw_package_todos(package)
         package.package_todos.each do |todo|
-          @graph.add_edges(
-            @nodes[package.name],
-            @nodes[todo],
-            color: @options[:package_todo_color]
-          )
+          add_edge(package.name, todo, @options[:package_todo_color])
         end
+      end
+
+      sig { params(from: String, to: String, color: String).void }
+      def add_edge(from, to, color)
+        source_cluster_name = cluster_for(from)&.name || from
+        destination_cluster_name = cluster_for(to)&.name || to
+        options = { color: color }
+        unless source_cluster_name == destination_cluster_name
+          options[:ltail] = source_cluster_name unless source_cluster_name == 'strict'
+          options[:lhead] = destination_cluster_name unless destination_cluster_name == 'strict'
+        end
+        @graph.add_edges(@nodes[from], @nodes[to], options)
       end
 
       sig { returns(T::Array[Presenters::Package]) }
